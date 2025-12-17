@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Play, 
@@ -9,7 +10,9 @@ import {
   Mic, 
   Check,
   ChevronDown,
-  Volume2
+  Volume2,
+  Upload,
+  FileText
 } from 'lucide-react';
 import { Scene, VoiceOption, VOICE_OPTIONS, Gender, PREVIEW_TEXT } from './types';
 import { generateSpeech } from './services/geminiService';
@@ -26,11 +29,10 @@ const App: React.FC = () => {
   const [isVoiceDropdownOpen, setIsVoiceDropdownOpen] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState<string | null>(null);
   
-  // Audio Refs
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
-  // Initialize Audio Context on user interaction
   const initAudioContext = () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -38,6 +40,43 @@ const App: React.FC = () => {
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      if (!content) return;
+
+      // Split by lines and filter out empty lines
+      const lines = content.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+      
+      if (lines.length === 0) {
+        alert("File trống hoặc không có nội dung hợp lệ.");
+        return;
+      }
+
+      const newScenes: Scene[] = lines.map((line, index) => ({
+        id: (index + 1).toString(),
+        text: line,
+        isGenerating: false,
+        isPlaying: false
+      }));
+
+      setScenes(newScenes);
+      // Reset input value to allow uploading same file again
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    reader.onerror = () => {
+      alert("Đã xảy ra lỗi khi đọc file.");
+    };
+
+    // Use readAsText which defaults to UTF-8
+    reader.readAsText(file);
   };
 
   const handleGenerate = async (sceneId: string) => {
@@ -50,9 +89,6 @@ const App: React.FC = () => {
 
     try {
       const pcmData = await generateSpeech(scene.text, selectedVoice.name);
-      
-      // Create Blob URL for potential standard HTML5 audio usage if needed, 
-      // but we will mainly use PCM data for playback to be precise with sample rate.
       const wavBlob = createWavBlob(pcmData);
       const audioUrl = URL.createObjectURL(wavBlob);
 
@@ -64,14 +100,13 @@ const App: React.FC = () => {
       } : s));
 
     } catch (error) {
-      alert(`Error generating voice for Scene ${sceneId}: ${error}`);
+      alert(`Lỗi khi tạo voice cho Scene ${sceneId}: ${error}`);
       setScenes(prev => prev.map(s => s.id === sceneId ? { ...s, isGenerating: false } : s));
     }
   };
 
   const handleGenerateAll = async () => {
     initAudioContext();
-    // Sequentially generate to avoid rate limits
     for (const scene of scenes) {
       if (!scene.audioData && !scene.isGenerating) {
         await handleGenerate(scene.id);
@@ -90,7 +125,7 @@ const App: React.FC = () => {
 
   const playAudio = async (sceneId: string) => {
     initAudioContext();
-    stopPlayback(); // Stop any current audio
+    stopPlayback();
 
     const scene = scenes.find(s => s.id === sceneId);
     if (!scene || !scene.audioData || !audioContextRef.current) return;
@@ -98,15 +133,7 @@ const App: React.FC = () => {
     setScenes(prev => prev.map(s => s.id === sceneId ? { ...s, isPlaying: true } : s));
 
     try {
-      // Decode the raw PCM wrapped in WAV or raw data. 
-      // Since we stored raw PCM ArrayBuffer, we need to manually create a buffer or decode.
-      // Easiest is to decode the WAV blob we created, or use raw data.
-      // Let's use the raw PCM data and put it into an AudioBuffer manually to ensure sample rate matches 24kHz.
-      
       const ctx = audioContextRef.current;
-      
-      // Create an AudioBuffer
-      // 16-bit PCM is -32768 to 32767. We need Float32 -1.0 to 1.0
       const int16Data = new Int16Array(scene.audioData);
       const float32Data = new Float32Array(int16Data.length);
       for (let i = 0; i < int16Data.length; i++) {
@@ -128,13 +155,13 @@ const App: React.FC = () => {
       activeSourceRef.current = source;
 
     } catch (e) {
-      console.error("Playback error", e);
+      console.error("Lỗi phát audio", e);
       setScenes(prev => prev.map(s => s.id === sceneId ? { ...s, isPlaying: false } : s));
     }
   };
 
   const handlePreviewVoice = async (voice: VoiceOption, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent dropdown selection
+    e.stopPropagation();
     initAudioContext();
     stopPlayback();
     setPreviewPlaying(voice.name);
@@ -159,7 +186,7 @@ const App: React.FC = () => {
       source.start();
       activeSourceRef.current = source;
     } catch (error) {
-      console.error("Preview failed", error);
+      console.error("Preview thất bại", error);
       setPreviewPlaying(null);
     }
   };
@@ -177,7 +204,6 @@ const App: React.FC = () => {
   const handleDownloadAll = () => {
     scenes.forEach(scene => {
       if (scene.audioUrl) {
-        // Slight delay to prevent browser blocking multiple downloads
         setTimeout(() => handleDownload(scene), 100);
       }
     });
@@ -198,17 +224,26 @@ const App: React.FC = () => {
             <p className="text-secondary mt-1">Tạo giọng đọc AI chuyên nghiệp với Gemini 2.5</p>
           </div>
           
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+             {/* Hidden File Input */}
+             <input 
+               type="file" 
+               accept=".txt" 
+               ref={fileInputRef} 
+               onChange={handleFileUpload} 
+               className="hidden" 
+             />
+
              {/* Voice Selector */}
              <div className="relative">
               <button 
                 onClick={() => setIsVoiceDropdownOpen(!isVoiceDropdownOpen)}
-                className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-lg shadow-sm hover:border-primary transition-colors min-w-[240px] justify-between"
+                className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-lg shadow-sm hover:border-primary transition-colors min-w-[220px] justify-between"
               >
                 <div className="flex items-center gap-2">
                   <div className={`w-2 h-2 rounded-full ${selectedVoice.gender === Gender.MALE ? 'bg-blue-500' : 'bg-pink-500'}`}></div>
                   <span className="font-medium">{selectedVoice.name}</span>
-                  <span className="text-xs text-slate-400">({selectedVoice.gender})</span>
+                  <span className="text-xs text-slate-400">({selectedVoice.gender === Gender.MALE ? 'Nam' : 'Nữ'})</span>
                 </div>
                 <ChevronDown size={16} />
               </button>
@@ -256,15 +291,24 @@ const App: React.FC = () => {
              </div>
 
              <button 
+               onClick={() => fileInputRef.current?.click()}
+               className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-lg font-medium hover:border-primary hover:text-primary transition-all active:scale-95 shadow-sm"
+             >
+               <Upload size={18} />
+               Nhập Kịch Bản (TXT)
+             </button>
+
+             <button 
                onClick={handleGenerateAll}
                className="flex items-center gap-2 bg-primary text-white px-5 py-2.5 rounded-lg font-medium hover:bg-primary-hover shadow-lg shadow-indigo-200 transition-all active:scale-95"
              >
                <FileAudio size={18} />
-               Tạo Tất Cả Voice
+               Tạo Tất Cả
              </button>
+             
              <button 
                onClick={handleDownloadAll}
-               className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-5 py-2.5 rounded-lg font-medium hover:bg-slate-50 transition-all active:scale-95"
+               className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-5 py-2.5 rounded-lg font-medium hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
              >
                <Download size={18} />
                Tải Tất Cả
@@ -283,84 +327,95 @@ const App: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {scenes.map((scene) => (
-                <tr key={scene.id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-6 py-4 align-top">
-                    <div className="bg-slate-100 text-slate-600 font-bold text-sm px-3 py-1 rounded inline-block">
-                      {scene.id}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 align-top">
-                    <textarea 
-                      value={scene.text}
-                      onChange={(e) => handleScriptChange(scene.id, e.target.value)}
-                      className="w-full bg-transparent border-0 focus:ring-0 p-0 text-slate-700 leading-relaxed resize-none h-24 placeholder-slate-300"
-                      placeholder="Nhập nội dung thoại..."
-                    />
-                  </td>
-                  <td className="px-6 py-4 align-top">
-                    <div className="flex flex-col gap-3">
-                      {scene.isGenerating ? (
-                        <div className="flex items-center gap-2 text-primary text-sm font-medium animate-pulse py-2">
-                          <Loader2 size={16} className="animate-spin" />
-                          Đang tạo voice...
-                        </div>
-                      ) : !scene.audioData ? (
-                        <button 
-                          onClick={() => handleGenerate(scene.id)}
-                          className="flex items-center justify-center gap-2 w-full py-2.5 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-primary hover:text-primary hover:bg-indigo-50 transition-all font-medium text-sm"
-                        >
-                          <Mic size={16} />
-                          Tạo Voice
-                        </button>
-                      ) : (
-                        <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 flex items-center justify-between gap-2 animate-in slide-in-from-bottom-2 duration-300">
-                          
-                          {/* Play/Pause Control */}
-                          <button 
-                            onClick={() => scene.isPlaying ? stopPlayback() : playAudio(scene.id)}
-                            className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${
-                              scene.isPlaying 
-                                ? 'bg-primary text-white shadow-md scale-105' 
-                                : 'bg-white text-primary border border-indigo-100 hover:bg-indigo-50'
-                            }`}
-                          >
-                            {scene.isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
-                          </button>
-
-                          <div className="h-8 w-px bg-indigo-200 mx-1"></div>
-
-                          {/* Action Buttons */}
-                          <div className="flex items-center gap-1">
-                            <button 
-                              onClick={() => handleGenerate(scene.id)}
-                              className="p-2 text-slate-500 hover:text-primary hover:bg-white rounded-md transition-colors tooltip-trigger"
-                              title="Tạo lại"
-                            >
-                              <RotateCcw size={18} />
-                            </button>
-                            
-                            <button 
-                              onClick={() => handleDownload(scene)}
-                              className="p-2 text-slate-500 hover:text-primary hover:bg-white rounded-md transition-colors"
-                              title="Tải xuống"
-                            >
-                              <Download size={18} />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      
-                      {scene.audioData && (
-                        <div className="flex items-center gap-1.5 text-xs text-green-600 font-medium px-1">
-                          <Check size={12} strokeWidth={3} />
-                          Đã tạo xong ({(scene.audioData.byteLength / 1024).toFixed(1)} KB)
-                        </div>
-                      )}
+              {scenes.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="px-6 py-12 text-center text-slate-400">
+                    <div className="flex flex-col items-center gap-3">
+                      <FileText size={48} strokeWidth={1} className="text-slate-200" />
+                      <p>Chưa có kịch bản. Hãy nhập kịch bản hoặc tải lên file .txt.</p>
                     </div>
                   </td>
                 </tr>
-              ))}
+              ) : (
+                scenes.map((scene) => (
+                  <tr key={scene.id} className="hover:bg-slate-50/50 transition-colors group">
+                    <td className="px-6 py-4 align-top">
+                      <div className="bg-slate-100 text-slate-600 font-bold text-sm px-3 py-1 rounded inline-block">
+                        {scene.id}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 align-top">
+                      <textarea 
+                        value={scene.text}
+                        onChange={(e) => handleScriptChange(scene.id, e.target.value)}
+                        className="w-full bg-transparent border-0 focus:ring-0 p-0 text-slate-700 leading-relaxed resize-none h-24 placeholder-slate-300"
+                        placeholder="Nhập nội dung thoại..."
+                      />
+                    </td>
+                    <td className="px-6 py-4 align-top">
+                      <div className="flex flex-col gap-3">
+                        {scene.isGenerating ? (
+                          <div className="flex items-center gap-2 text-primary text-sm font-medium animate-pulse py-2">
+                            <Loader2 size={16} className="animate-spin" />
+                            Đang tạo voice...
+                          </div>
+                        ) : !scene.audioData ? (
+                          <button 
+                            onClick={() => handleGenerate(scene.id)}
+                            className="flex items-center justify-center gap-2 w-full py-2.5 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-primary hover:text-primary hover:bg-indigo-50 transition-all font-medium text-sm"
+                          >
+                            <Mic size={16} />
+                            Tạo Voice
+                          </button>
+                        ) : (
+                          <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 flex items-center justify-between gap-2 animate-in slide-in-from-bottom-2 duration-300">
+                            
+                            {/* Play/Pause Control */}
+                            <button 
+                              onClick={() => scene.isPlaying ? stopPlayback() : playAudio(scene.id)}
+                              className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${
+                                scene.isPlaying 
+                                  ? 'bg-primary text-white shadow-md scale-105' 
+                                  : 'bg-white text-primary border border-indigo-100 hover:bg-indigo-50'
+                              }`}
+                            >
+                              {scene.isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
+                            </button>
+
+                            <div className="h-8 w-px bg-indigo-200 mx-1"></div>
+
+                            {/* Action Buttons */}
+                            <div className="flex items-center gap-1">
+                              <button 
+                                onClick={() => handleGenerate(scene.id)}
+                                className="p-2 text-slate-500 hover:text-primary hover:bg-white rounded-md transition-colors tooltip-trigger"
+                                title="Tạo lại"
+                              >
+                                <RotateCcw size={18} />
+                              </button>
+                              
+                              <button 
+                                onClick={() => handleDownload(scene)}
+                                className="p-2 text-slate-500 hover:text-primary hover:bg-white rounded-md transition-colors"
+                                title="Tải xuống"
+                              >
+                                <Download size={18} />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {scene.audioData && (
+                          <div className="flex items-center gap-1.5 text-xs text-green-600 font-medium px-1">
+                            <Check size={12} strokeWidth={3} />
+                            Đã tạo xong ({(scene.audioData.byteLength / 1024).toFixed(1)} KB)
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
