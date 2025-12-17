@@ -1,0 +1,5 @@
+{
+  "name": "Gemini TTS Storyboard",
+  "description": "A professional script-to-voice storyboard tool using Gemini 2.5 TTS models. Features specific voice selection (Male/Female), audio preview, PCM-to-WAV conversion, and scene-based management.",
+  "requestFramePermissions": []
+}
